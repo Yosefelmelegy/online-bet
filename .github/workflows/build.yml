@@ -1,19 +1,17 @@
 
-name: Build BaytAlHams for Windows
+name: Build BaytAlHams EXE
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build ${{ matrix.arch }} EXE
+  build-windows:
+    name: Build Windows ${{ matrix.arch }}
     runs-on: windows-latest
 
     strategy:
@@ -26,7 +24,7 @@ jobs:
             python_arch: x64
 
     steps:
-      - name: Checkout repository
+      - name: Checkout project
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -35,36 +33,32 @@ jobs:
           python-version: '3.11'
           architecture: ${{ matrix.python_arch }}
 
-      - name: Verify Python architecture
+      - name: Check project files
         shell: pwsh
         run: |
-          python -c "import struct; print('Python:', struct.calcsize('P') * 8, 'bit')"
+          if (!(Test-Path "main.py")) {
+            throw "main.py was not found"
+          }
+
+          if (!(Test-Path "requirements.txt")) {
+            throw "requirements.txt was not found"
+          }
+
+          if (!(Test-Path "assets")) {
+            throw "assets folder was not found"
+          }
+
+          Write-Host "Python architecture:"
+          python -c "import struct; print(str(struct.calcsize('P') * 8) + '-bit')"
 
       - name: Install dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
           python -m pip install pyinstaller
-          if (Test-Path requirements.txt) {
-            python -m pip install -r requirements.txt
-          }
 
-      - name: Validate required files
-        shell: pwsh
-        run: |
-          $required = @(
-            "main.py",
-            "assets",
-            "online_config.json"
-          )
-
-          foreach ($item in $required) {
-            if (-not (Test-Path $item)) {
-              throw "Missing required file or folder: $item"
-            }
-          }
-
-      - name: Build game EXE
+      - name: Build EXE
         shell: pwsh
         run: |
           $args = @(
@@ -74,10 +68,11 @@ jobs:
             "--windowed",
             "--name", "BaytAlHams",
             "--add-data", "assets;assets",
-            "--add-data", "online_config.json;.",
-            "--hidden-import", "online_net",
+            "--hidden-import", "arabic_reshaper",
+            "--hidden-import", "bidi",
             "--hidden-import", "pyttsx3.drivers",
-            "--hidden-import", "pyttsx3.drivers.sapi5"
+            "--hidden-import", "pyttsx3.drivers.sapi5",
+            "--hidden-import", "server"
           )
 
           if (Test-Path "assets/icon.ico") {
@@ -88,34 +83,14 @@ jobs:
 
           python -m PyInstaller @args
 
-          if (-not (Test-Path "dist/BaytAlHams.exe")) {
-            throw "EXE build failed."
+          if (!(Test-Path "dist/BaytAlHams.exe")) {
+            throw "EXE was not created"
           }
 
-      - name: Package server source
-        shell: pwsh
-        run: |
-          if ((Test-Path "server.py") -and
-              (Test-Path "online_config.json")) {
-            New-Item -ItemType Directory -Force `
-              -Path "server-package" | Out-Null
-
-            Copy-Item "server.py", "online_config.json" `
-              -Destination "server-package"
-
-            Compress-Archive `
-              -Path "server-package/*" `
-              -DestinationPath "dist/BaytAlHams-Server-Source-${{ matrix.arch }}.zip" `
-              -Force
-          }
-
-      - name: Rename EXE for architecture
-        shell: pwsh
-        run: |
           Move-Item "dist/BaytAlHams.exe" `
             "dist/BaytAlHams-${{ matrix.arch }}.exe"
 
-      - name: Upload game EXE
+      - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
           name: BaytAlHams-Windows-${{ matrix.arch }}
@@ -123,11 +98,29 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Package server source
+        if: hashFiles('server.py') != ''
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force `
+            -Path server-package | Out-Null
+
+          Copy-Item server.py server-package/
+
+          if (Test-Path "requirements.txt") {
+            Copy-Item requirements.txt server-package/
+          }
+
+          Compress-Archive `
+            -Path server-package/* `
+            -DestinationPath "dist/BaytAlHams-Server-${{ matrix.arch }}.zip" `
+            -Force
+
       - name: Upload server source
         if: hashFiles('server.py') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: BaytAlHams-Server-Source-${{ matrix.arch }}
-          path: dist/BaytAlHams-Server-Source-${{ matrix.arch }}.zip
-          if-no-files-found: warn
+          name: BaytAlHams-Server-${{ matrix.arch }}
+          path: dist/BaytAlHams-Server-${{ matrix.arch }}.zip
+          if-no-files-found: error
           compression-level: 0
